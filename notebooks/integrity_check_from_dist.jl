@@ -306,9 +306,7 @@ md"""
 """
 
 # ╔═╡ f0cafa47-3f83-4fa1-bcfc-e3ecf1e49318
-begin
-
-	num = 1000
+function getPosesStats(num_poses = 1000)
 
 	# Create runway scenario
 	runway_corners = [
@@ -354,49 +352,47 @@ begin
 		push!(poses_stats, (cam_pos_est, cam_rot_est, stats))
 
 	end
+	
+	return poses_stats, runway_corners, cam_pos
 end
 
 # ╔═╡ 7f3146d2-fc74-401b-8065-a722f3829341
-begin
+function plot_poses(poses_stats; world_points=[], color=:blue)
 	
-	function plot_poses(poses_stats; world_points=[], color=:blue)
-		fig = Figure(size=(600, 500))
-		ax = Axis3(fig[1, 1],
-			title = "Camera Pose Visualization ($(length(poses_stats)) samples)",
-			aspect = (1, 1, 1),
-			xlabel = "x (m)", ylabel = "y (m)", zlabel = "z (m)"
-		)
-	
-		# Plot runway corners
-		if !isempty(world_points)
-			X = [ustrip(p.x) for p in world_points]
-			Y = [ustrip(p.y) for p in world_points]
-			Z = [ustrip(p.z) for p in world_points]
-			WGLMakie.scatter!(ax, X, Y, Z, color=:gray, markersize=3)
-		end
-	
-		xs = [ustrip(p[1].x) for p in poses_stats]
-		ys = [ustrip(p[1].y) for p in poses_stats]
-		zs = [ustrip(p[1].z) for p in poses_stats]
+	fig = Figure(size=(600, 500))
+	ax = Axis3(fig[1, 1],
+		title = "Camera Pose Visualization ($(length(poses_stats)) samples)",
+		aspect = (1, 1, 1),
+		xlabel = "x (m)", ylabel = "y (m)", zlabel = "z (m)"
+	)
 
-		colors = [p[3].p_value > 0.05 ? color : :red for p in poses_stats]
-		WGLMakie.scatter!(ax, xs, ys, zs, color=colors, markersize=3)
-	
-		x_center, y_center, z_center = mean(xs), mean(ys), mean(zs)
-		WGLMakie.limits!(
-		    ax,
-		    x_center - 100, x_center + 100,
-		    y_center - 20,  y_center + 20,
-		    z_center - 20,  z_center + 20
-		)
-		fig
+	# Plot runway corners
+	if !isempty(world_points)
+		X = [ustrip(p.x) for p in world_points]
+		Y = [ustrip(p.y) for p in world_points]
+		Z = [ustrip(p.z) for p in world_points]
+		WGLMakie.scatter!(ax, X, Y, Z, color=:gray, markersize=3)
 	end
 
-	plot_poses(poses_stats, world_points=runway_corners)
+	xs = [ustrip(p[1].x) for p in poses_stats]
+	ys = [ustrip(p[1].y) for p in poses_stats]
+	zs = [ustrip(p[1].z) for p in poses_stats]
+
+	colors = [p[3].p_value > 0.05 ? color : :red for p in poses_stats]
+	WGLMakie.scatter!(ax, xs, ys, zs, color=colors, markersize=3)
+
+	x_center, y_center, z_center = mean(xs), mean(ys), mean(zs)
+	WGLMakie.limits!(
+		ax,
+		x_center - 100, x_center + 100,
+		y_center - 20,  y_center + 20,
+		z_center - 20,  z_center + 20
+	)
+	fig
 end
 
 # ╔═╡ 13f300cd-4861-4eb6-a9a2-9b49be564d8d
-begin
+function plotPoseIntegrityResults(poses_stats)
 
 	# Get passing poses without units
 	passing_poses = [p[1] for p in poses_stats if p[3].p_value > 0.05]
@@ -444,6 +440,61 @@ begin
 	end
 end
 
+# ╔═╡ 31246a00-bb35-47b5-b068-0f4d2a2fe45d
+poses_stats, runway_corners, cam_pos = getPosesStats()
+
+# ╔═╡ 4ef73978-efc7-4692-8523-996995dd447a
+plotPoseIntegrityResults(poses_stats)
+
+# ╔═╡ c196aba8-2f0e-4272-89a9-9509c9a4cd3b
+# ╠═╡ disabled = true
+#=╠═╡
+plot_poses(poses_stats, world_points=runway_corners)
+  ╠═╡ =#
+
+# ╔═╡ b2875376-b000-4bce-94cf-fad0b961b32c
+md"""
+We want to get the max delta in pose estimation, so we look at the maximum delta in each direction from the cam_pos defined in `getPosesStats()`.
+
+We consider the maximum delta in x, y, z directions.
+"""
+
+# ╔═╡ e2c35e4c-8c0b-437d-b646-ae1d6a9dda0e
+function getMaxXYZ(poses_stats, cam_pos)
+
+	# Get x, y, z values that pass
+	xs = [p[1].x for p in poses_stats if p[3].p_value > 0.05]
+	ys = [p[1].y for p in poses_stats if p[3].p_value > 0.05]
+	zs = [p[1].z for p in poses_stats if p[3].p_value > 0.05]
+
+	# Subtract cam pos values from xs, ys, zs
+	x_deltas = ustrip.(xs .- cam_pos.x)
+	y_deltas = ustrip.(ys .- cam_pos.y)
+	z_deltas = ustrip.(zs .- cam_pos.z)
+
+	# Get max values
+	max_xi = argmax(abs.(x_deltas))
+	max_yi = argmax(abs.(y_deltas))
+	max_zi = argmax(abs.(z_deltas))
+
+	return xs[max_xi], ys[max_yi], zs[max_zi]
+	
+end
+
+# ╔═╡ 4c67fbee-c45f-45c2-9ec1-682b7156e8e4
+begin
+	max_x, max_y, max_z = getMaxXYZ(poses_stats, cam_pos)
+	
+	print("Maximum delta from cam pos in x dir: \n")
+	print("x location: ", max_x, "\nx diff: ", cam_pos.x - max_x, "\n\n")
+	
+	print("Maximum delta from cam pos in y dir: \n")
+	print("y location: ", max_y, "\ny diff: ", cam_pos.y - max_y, "\n\n")
+
+	print("Maximum delta from cam pos in z dir: \n")
+	print("z location: ", max_z, "\nz diff: ", cam_pos.z - max_z, "\n\n")
+end
+
 # ╔═╡ 53612ea4-9f3d-4c28-82a4-e4b3875ba20d
 md"""
 ## 5. Monte Carlo Integrity Check: Method 2
@@ -454,11 +505,20 @@ md"""
 """
 
 # ╔═╡ 5b2ddcb4-a672-4633-a7a6-f8d85b89fbbc
-begin
+function getPosesStatsCorners(corner_index=1)
 
-
-	# Corner 1
-	corner_index = 1
+	# Create runway scenario
+	runway_corners = [
+		WorldPoint(0.0m, 50m, 0m),     # near left
+		WorldPoint(3000.0m, 50m, 0m),  # far left
+		WorldPoint(3000.0m, -50m, 0m),  # far right
+		WorldPoint(0.0m, -50m, 0m),    # near right
+	]
+	
+	cam_pos = WorldPoint(-2000.0m, 12m, 150m)
+	cam_rot = RotZYX(roll=1.5°, pitch=5°, yaw=0°)
+	
+	true_observations = [project(cam_pos, cam_rot, p) for p in runway_corners]
 
 	# 3 spirals
 	a = 0
@@ -499,25 +559,27 @@ begin
 
 		push!(poses_stats_corners, (cam_pos_est, cam_rot_est, stats, noisy_observations))
 	end
+
+	return poses_stats_corners
 end
 
-# ╔═╡ b7ca6dbb-1125-4dfc-979d-d66594fa71af
-print(length(poses_stats_corners))
-
 # ╔═╡ 1eaa7bcc-f45f-4ff4-935e-5f8f646b29b5
-begin
-	passing = [p for p in poses_stats_corners if p[3].p_value > 0.05]
-	failing = [p for p in poses_stats_corners if p[3].p_value ≤ 0.05]
+function plotSpiralPoses(poses_stats_corners, corner_index)
+
+	# Get passing and failing samples
+	passing_samples = [p for p in poses_stats_corners if p[3].p_value > 0.05]
+	failing_samples = [p for p in poses_stats_corners if p[3].p_value ≤ 0.05]
 
 	passing_points = [
 	    Point3f(ustrip(p[1].x), ustrip(p[1].y), ustrip(p[1].z))
-	    for p in passing
+	    for p in passing_samples
 	]
 	failing_points = [
 	    Point3f(ustrip(p[1].x), ustrip(p[1].y), ustrip(p[1].z))
-	    for p in failing
+	    for p in failing_samples
 	]
-	
+
+	# Create plot
 	with_theme(theme_black()) do
 	    fig = Figure(size=(700, 600))
 	    ax = Axis3(fig[1,1];
@@ -551,7 +613,8 @@ begin
 end
 
 # ╔═╡ ab088db3-48ce-47b6-93ee-6057c7a13001
-begin
+function plotSpiralCorners(poses_stats_corners, corner_index=1)
+	
 	with_theme(theme_black()) do
 	    fig = Figure(size=(500, 500))
 	    ax = Axis(
@@ -595,6 +658,32 @@ begin
 
 end
 
+# ╔═╡ 43dc395c-9249-42a2-97b6-2280b60a9492
+begin
+	corner_index = 1
+	poses_stats_corners = getPosesStatsCorners(corner_index)
+	plotSpiralPoses(poses_stats_corners, corner_index)
+end
+
+# ╔═╡ 33663e22-6964-4993-b22c-9ce889beec54
+begin
+	plotSpiralCorners(poses_stats_corners, corner_index)
+end
+
+# ╔═╡ d14107cc-5ff2-481f-b507-6783995430f5
+let
+	max_x, max_y, max_z = getMaxXYZ(poses_stats_corners, cam_pos)
+	
+	print("Maximum delta from cam pos in x dir: \n")
+	print("x location: ", max_x, "\nx diff: ", cam_pos.x - max_x, "\n\n")
+	
+	print("Maximum delta from cam pos in y dir: \n")
+	print("y location: ", max_y, "\ny diff: ", cam_pos.y - max_y, "\n\n")
+
+	print("Maximum delta from cam pos in z dir: \n")
+	print("z location: ", max_z, "\nz diff: ", cam_pos.z - max_z, "\n\n")
+end
+
 # ╔═╡ Cell order:
 # ╟─f6f880a7-5c6b-427a-8a0e-a1adf80419ec
 # ╟─86dad518-9b91-4dad-ac41-f1ca9409d5e5
@@ -613,12 +702,20 @@ end
 # ╠═48beb3ee-e907-4407-aa78-8467f6f09443
 # ╠═56b8a70b-cd35-49ac-9927-567e38db6b2a
 # ╠═85a43112-ff09-439a-a0c1-ef31718616a2
-# ╠═081334b7-d1ce-46f9-8555-92f66ce97b29
+# ╟─081334b7-d1ce-46f9-8555-92f66ce97b29
 # ╠═f0cafa47-3f83-4fa1-bcfc-e3ecf1e49318
-# ╠═7f3146d2-fc74-401b-8065-a722f3829341
-# ╠═13f300cd-4861-4eb6-a9a2-9b49be564d8d
-# ╠═53612ea4-9f3d-4c28-82a4-e4b3875ba20d
-# ╠═5b2ddcb4-a672-4633-a7a6-f8d85b89fbbc
-# ╠═b7ca6dbb-1125-4dfc-979d-d66594fa71af
-# ╠═1eaa7bcc-f45f-4ff4-935e-5f8f646b29b5
-# ╠═ab088db3-48ce-47b6-93ee-6057c7a13001
+# ╟─7f3146d2-fc74-401b-8065-a722f3829341
+# ╟─13f300cd-4861-4eb6-a9a2-9b49be564d8d
+# ╠═31246a00-bb35-47b5-b068-0f4d2a2fe45d
+# ╠═4ef73978-efc7-4692-8523-996995dd447a
+# ╟─c196aba8-2f0e-4272-89a9-9509c9a4cd3b
+# ╟─b2875376-b000-4bce-94cf-fad0b961b32c
+# ╠═e2c35e4c-8c0b-437d-b646-ae1d6a9dda0e
+# ╠═4c67fbee-c45f-45c2-9ec1-682b7156e8e4
+# ╟─53612ea4-9f3d-4c28-82a4-e4b3875ba20d
+# ╟─5b2ddcb4-a672-4633-a7a6-f8d85b89fbbc
+# ╟─1eaa7bcc-f45f-4ff4-935e-5f8f646b29b5
+# ╟─ab088db3-48ce-47b6-93ee-6057c7a13001
+# ╠═43dc395c-9249-42a2-97b6-2280b60a9492
+# ╠═33663e22-6964-4993-b22c-9ce889beec54
+# ╠═d14107cc-5ff2-481f-b507-6783995430f5
