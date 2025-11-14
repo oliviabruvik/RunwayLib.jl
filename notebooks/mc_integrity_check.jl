@@ -226,7 +226,7 @@ function plotPoseIntegrityResults(poses_stats)
 end
 
 # ╔═╡ 04338b2d-878d-4a69-818c-26a48a10cc92
-poses_stats, runway_corners, cam_pos = getPosesStats3DOF()
+poses_stats, runway_corners, cam_pos = getPosesStats() # getPosesStats3DOF()
 
 # ╔═╡ b83e4659-d4a0-4726-bbd6-4a824ffbcec9
 plot_poses(poses_stats, world_points=runway_corners)

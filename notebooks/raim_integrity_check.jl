@@ -26,6 +26,37 @@ begin
 	using WGLMakie
 end
 
+# ╔═╡ 822563ea-1e9f-4d0f-a766-a684ac5283b7
+md"""
+# Integrity Analysis for Runway Pose Estimation
+
+*By Olivia Beyer Bruvik, Stanford University*
+
+This notebook evaluates how noisy or corrupted runway corner detections affect
+camera pose estimation. The goal is to quantify **how large an undetected pose
+error can be** under a residual-based fault detector.
+
+We use two methods:
+
+### Method 1 — Monte Carlo Sampling
+Add random pixel noise to all corner detections, estimate the pose, evaluate the
+residual-based p-value, keep passing samples (p > 0.05), and measure the maximum
+undetected position error.
+
+### Method 2 — Spiral Corner Perturbation
+Perturb a single corner along a 2D spiral, record which offsets pass/fail, and
+observe how the pose shifts along the entire spiral. This reveals the structure
+of the pass/fail boundary and the estimator’s sensitivity to localized faults.
+
+### RAIM-inspired theoretical approach
+We also examine the **worst-case fault direction** using a RAIM-style failure
+mode slope formulation, which provides an analytic upper bound on undetected
+position bias.
+
+Together, these approaches show how pixel-level faults propagate to pose errors
+and when the detector succeeds or fails to flag them.
+"""
+
 # ╔═╡ c64fe80a-bf45-11f0-939e-07bfe344d12f
 md"""
 ## Monte Carlo Integrity Check: Method 1
@@ -283,20 +314,24 @@ end
 md"""
 ## Monte Carlo Integrity Check: Method 2 (Spiral Corner Perturbation)
 
-This method performs a directed search for the smallest pixel perturbation at a
-single runway corner that causes the residual-based integrity test to fail.
+This method systematically sweeps through a spiral of pixel perturbations applied to a single runway corner. Instead of stopping at the first failure, the method traces an
+entire spiral of offsets, allowing us to observe **where in pixel space the
+residual test begins to fail**.
 
-1. For a selected corner, apply an increasing 2D perturbation in pixel space  
-   (using a spiral pattern to explore radius and direction).
+1. For a selected corner, generate a 2D spiral of increasing pixel offsets
+   (covering multiple radii and directions).
 2. For each perturbed observation, run the pose estimator and evaluate the
    RAIM-like residual test statistic.  
-   Stop at the point where the detection **first fails** (p-value ≤ 0.05).
-3. Record the corresponding change in estimated camera position `(Δx, Δy, Δz)`
-   to quantify the worst pose error that **a single-corner fault** can induce.
+   This produces a full map of **passing** and **failing** perturbations,
+   rather than stopping at the first failing case.
+3. Record the pose estimate for every point along the spiral to visualize how
+   the camera position changes under localized corner faults.
 
-This provides an empirical bound on the **fault sensitivity** of the pose
-estimator to localized corner perturbations, complementing the global Monte
-Carlo search in Method 1.
+This gives a complete picture of the **fault sensitivity** of the pose estimator
+for that corner: regions of pixel space where perturbations remain undetected
+versus regions that trigger the detector. It complements Method 1 by showing the
+**structure of the pass/fail boundary** rather than just the maximum undetected
+bias.
 """
 
 # ╔═╡ e0fb9177-65ad-43b8-adbd-2e54bc273db2
@@ -475,35 +510,8 @@ let
 	println("Max Δz = ", Δz, " m")
 end
 
-# ╔═╡ 26baf950-b487-4db2-aa76-b7934157d0db
-md"""
-# RAIM-inspired integrity approach
-"""
-
 # ╔═╡ f938f8ef-15cc-4537-be65-83539e9ad771
 md"""
-**Goal:**
-$\max_{f} \; |S_0^T f|$
-subject to
-$f^T (I_n - H S_0) f \leq T_{RB}^2$
-
-$s_0 = \alpha S_0 = \alpha H^+, \quad \alpha = [0\;0\;1\;0]$
-
-**Failure mode slope**
-$g_F^2 \equiv \frac{f^T S_0 S_0^T f}{f^T (I_n - H S_0) f}$
-
-**Worst case failure mode slope**
-$\bar{g}_{F,i}^2 = s_0 (I_n - H S_0)^{-1} s_0$
-
-**Worst case fault vector direction**
-$\bar{f}_i = (I_n - H S_0)^{-1} S_0 = \sigma \Delta i$
-
-**Note:** $g_{F,i}$ quantifies how much a given fault affects the position estimate relative to the residual test statistic.
-
-$|\varepsilon_0|_{\max} = g_F \cdot T_{RB}, \quad \varepsilon_0 = x - x_0$
-
-where $T_{RB}$ is a function of the threshold in the fault detection algorithm.
-
 
 ## RAIM-Inspired Integrity Analysis (Failure Mode Slope Formulation)
 
@@ -588,13 +596,13 @@ let
     with_theme(theme_black()) do
         fig = Figure(size = (600, 400))
         ax = Axis(fig[1, 1],
-            title = "Integrity Check vs Error",
-            xlabel = "Error (units)",
-            ylabel = "Pass (1) / Fail (0)",
-            backgroundcolor = :black,
-            xgridvisible = false,
-            ygridvisible = false
-        )
+		    title = "p-value of Residual Test vs Position Error",
+		    xlabel = "Error (m)",
+		    ylabel = "p-value (p-value < 0.05 fails)",
+		    backgroundcolor = :black,
+		    xgridvisible = false,
+		    ygridvisible = false,
+		)
 
         WGLMakie.scatter!(ax, x_deltas, pvalues; color = :cyan, markersize = 6)
         fig
@@ -607,63 +615,63 @@ end
 let
     xs = [p[1].x for p in poses_stats]
     pvalues = [p[3].p_value for p in poses_stats]
+
     x_deltas = ustrip.(xs .- cam_pos.x)
+    passes = pvalues .> 0.05
 
-    # Define bins (10 m width)
-    bin_edges = collect(-100:10:100)
+    # Adaptive bin range based on data
+    min_x = floor(minimum(x_deltas))
+    max_x = ceil(maximum(x_deltas))
+    bin_edges = collect(min_x:10:max_x)
     bin_centers = (bin_edges[1:end-1] .+ bin_edges[2:end]) ./ 2
-    pass_rate, std_rate, n_in_bin = Float64[], Float64[], Int[]
 
+    # Compute pass rates
+    pass_rate = Float64[]
+    std_rate = Float64[]
     for i in 1:length(bin_centers)
         in_bin = findall(x -> x >= bin_edges[i] && x < bin_edges[i+1], x_deltas)
-        if !isempty(in_bin)
-            passes = [pvalues[j] > 0.05 for j in in_bin]
-            rate = mean(passes)
-            σ = √(rate * (1 - rate) / length(passes))  # binomial std dev
-            push!(pass_rate, rate)
-            push!(std_rate, σ)
-            push!(n_in_bin, length(in_bin))
-        else
+        if isempty(in_bin)
             push!(pass_rate, NaN)
             push!(std_rate, NaN)
-            push!(n_in_bin, 0)
+        else
+            r = mean(passes[in_bin])
+            σ = √(r*(1-r)/length(in_bin))
+            push!(pass_rate, r)
+            push!(std_rate, σ)
         end
     end
 
-    # Optional smoothing
-    smooth_rate = [mean(skipmissing(pass_rate[max(1, i-1):min(end, i+1)])) for i in 1:length(pass_rate)]
-    smooth_std  = [mean(skipmissing(std_rate[max(1, i-1):min(end, i+1)])) for i in 1:length(std_rate)]
+    # Smooth
+    smooth_rate = [mean(skipmissing(pass_rate[max(1,i-1):min(end,i+1)])) for i in 1:length(pass_rate)]
+    smooth_std  = [mean(skipmissing(std_rate[max(1,i-1):min(end,i+1)])) for i in 1:length(std_rate)]
 
     with_theme(theme_black()) do
         fig = Figure(size = (700, 500))
 
-        # --- Top: scatter of p-values ---
+        # Upper plot — p-values
         ax1 = Axis(fig[1, 1],
-            title = "Integrity Check vs Error",
+            title = "p-value vs Error",
             xlabel = "Error (m)",
-            ylabel = "p-value",
-            backgroundcolor = :black,
-            # ylimits = (0, 1)
-        )
+            ylabel = "p-value (p-value < 0.05 fails)",
+            backgroundcolor = :black)
+
         WGLMakie.scatter!(ax1, x_deltas, pvalues; color = :cyan, markersize = 4)
 
-        # --- Bottom: detection probability with ±1σ shading ---
+        # Lower plot — detection probability
         ax2 = Axis(fig[2, 1],
-            title = "Detection Probability vs Error (with ±1σ)",
+            title = "Detection Probability vs Error",
             xlabel = "Error (m)",
-            ylabel = "Probability",
-            backgroundcolor = :black,
-            # ylimits = (0, 1)
-        )
+            ylabel = "Probability of passing",
+            backgroundcolor = :black)
 
-        # Fill between (mean ± std)
         lower = clamp.(smooth_rate .- smooth_std, 0, 1)
         upper = clamp.(smooth_rate .+ smooth_std, 0, 1)
+
         WGLMakie.band!(ax2, bin_centers, lower, upper; color = (:lime, 0.25))
-        WGLMakie.lines!(ax2, bin_centers, smooth_rate; color = :lime, linewidth = 2, label = "Pass Rate (mean ±1σ)")
+        WGLMakie.lines!(ax2, bin_centers, smooth_rate; color = :lime, linewidth = 2, label = "Pass Rate")
         WGLMakie.lines!(ax2, bin_centers, 1 .- smooth_rate; color = :magenta, linewidth = 2, label = "Detection Probability")
 
-        axislegend(ax2, position = :rb)
+        axislegend(ax2)
 
         fig
     end
@@ -671,30 +679,30 @@ end
 
 
 # ╔═╡ Cell order:
+# ╟─822563ea-1e9f-4d0f-a766-a684ac5283b7
 # ╟─c64fe80a-bf45-11f0-939e-07bfe344d12f
 # ╟─3c0463b0-803c-4c25-8834-9c5d2f4bf661
 # ╟─3554a19f-ceec-48d9-ad4d-dd3cc7a37f14
 # ╠═22ab9ac9-7ab7-4612-954a-bbd46a20b75a
-# ╠═608ec2b2-5f80-48db-95e2-88b564a3ab7f
-# ╠═cda48361-ba0b-4737-993b-9bc58c342c05
-# ╠═aaa21c7a-24c5-4cf1-9342-a3e14bde650a
-# ╠═06f94f8d-cb17-4cf9-8351-f27c216875b6
-# ╠═0aa65cb8-64ba-4a73-b093-026c636bfbbd
+# ╟─608ec2b2-5f80-48db-95e2-88b564a3ab7f
+# ╟─cda48361-ba0b-4737-993b-9bc58c342c05
+# ╟─aaa21c7a-24c5-4cf1-9342-a3e14bde650a
+# ╟─06f94f8d-cb17-4cf9-8351-f27c216875b6
+# ╟─0aa65cb8-64ba-4a73-b093-026c636bfbbd
 # ╠═04338b2d-878d-4a69-818c-26a48a10cc92
 # ╠═b83e4659-d4a0-4726-bbd6-4a824ffbcec9
 # ╠═6df595af-1e0b-41f4-b6a2-50f1dfd6cee9
 # ╟─8f59e2ff-ffa5-4520-ad94-95006de8f397
-# ╠═35bcca17-c6ae-45be-9519-42ddaf17946d
-# ╠═80f1c84c-a035-4584-b84f-e7110ac748c5
+# ╟─35bcca17-c6ae-45be-9519-42ddaf17946d
+# ╟─80f1c84c-a035-4584-b84f-e7110ac748c5
 # ╟─7fbfd4ad-6c9d-494a-a6c4-fbafbb325b7c
-# ╠═e0fb9177-65ad-43b8-adbd-2e54bc273db2
-# ╠═a6e2e410-cd45-43b9-9653-40fd57966fee
-# ╠═98de9a80-828d-4f5f-a4cc-d1c841c45ffd
-# ╠═f89992f2-ea57-4c35-8191-31d960e1f770
+# ╟─e0fb9177-65ad-43b8-adbd-2e54bc273db2
+# ╟─a6e2e410-cd45-43b9-9653-40fd57966fee
+# ╟─98de9a80-828d-4f5f-a4cc-d1c841c45ffd
+# ╟─f89992f2-ea57-4c35-8191-31d960e1f770
 # ╠═4bf4bbd5-2d82-4630-a3a6-2ba479bffe2d
-# ╠═9345a90d-82b7-4866-8a2a-10f2b2ff4a3b
-# ╠═0f0d6f98-56e5-4cea-bf34-bdf6e3b4103b
-# ╟─26baf950-b487-4db2-aa76-b7934157d0db
-# ╠═f938f8ef-15cc-4537-be65-83539e9ad771
-# ╠═65b4a3aa-37e7-4668-989d-f404f18df951
-# ╠═27c8fbc0-c8b5-4d21-8cb5-c70a121343be
+# ╟─9345a90d-82b7-4866-8a2a-10f2b2ff4a3b
+# ╟─0f0d6f98-56e5-4cea-bf34-bdf6e3b4103b
+# ╟─f938f8ef-15cc-4537-be65-83539e9ad771
+# ╟─65b4a3aa-37e7-4668-989d-f404f18df951
+# ╟─27c8fbc0-c8b5-4d21-8cb5-c70a121343be
